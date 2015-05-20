@@ -22,13 +22,9 @@ cnt = 0
 with open(opt.mapfname) as f:
     for line in f:
         tmp = line.rstrip().split( " " )
-        #if( cnt == 0 ):
-        #    chrMapVerify = [ tmp[0] , 0 ]
-        #else 
         # convert back to physical position, assuming Merlin was given a map with 1cM/Mb fixed relationship:
         ppos = float(tmp[2]) * 100.0 * 1000000.0 
         mmap.append( [ tmp[0], tmp[1], int(round(ppos)) ] )
-        #print mmap[cnt]
         cnt+=1
 print "Read MERLIN map file with %s lines" % len(mmap)
 
@@ -47,7 +43,7 @@ print "Identifying informative markers..."
 het = []
 for j,gval in enumerate( geno ):
     tmp = []
-    for j,gt in enumerate( gval ):
+    for k,gt in enumerate( gval ):
         if( ( gt[0]==missingGT ) | ( gt[1]==missingGT ) ): # missing genotypes
             tmp.append( -1 )
             continue
@@ -76,7 +72,6 @@ for i,pval in enumerate( ped ):
                 mix = j
             if( val[1] == cid ):
                 cix = j
-        im = ip = []
         for j,val in enumerate( het[0] ):
             phet = ( het[pix][j]==1 ) # het in father
             mhet = ( het[mix][j]==1 ) # het in mother
@@ -88,33 +83,19 @@ for i,pval in enumerate( ped ):
                 infp = ( phet ) & ( ((mhet) & (not chet)) | ((not mhet) & chet) )
                 ### informative in mother:
                 infm = ( mhet ) & ( ((phet) & (not chet)) | ((not phet) & chet) )
-            # print "pGT %s, mGT %s, cGT %s" % ( geno[pix][j], geno[mix][j], geno[cix][j] )
-            # print "phet %s, mhet %s, chet %s" % ( phet, mhet, chet )
-            # print "inf father:%s, inf mother:%s" % ( infp, infm )
-            #im.append( infm )
-            #ip.append( infp )
             inf[cmix].append( infm )
             inf[cpix].append( infp )
-        #print( inf[cmix] )
 
-
-print "Reading flow file..."
 ### read flow file (transposed format (--horzontal)):
-
+print "Reading flow file..."
 COfile = open( opt.outfname, "w" )
 COfile.write( "pedigreeID\tchildID\tpaternalID\tmaternalID\trecomb.type\tchr\tpos.lower\tpos\tinformative.left\tinformative.right\n" )
-
 mapIndx = 0 # running index to mmap. Increment with each chromosome block
-indivEvents = [] # reset for each indiv
+indivEvents = [] # crossovers for each indiv
 mkrCnt = 0
 with open(opt.flowfname) as f:
     for line in f:
         if line in ['\n', '\r\n']: # end of chromosome
-            # fill in previous entry's inf marker count
-            if( len(indivEvents) > 0 ):
-                indivEvents[-1].append( infMcnt )
-                event = "\t".join( map(str,indivEvents[-1]) )
-                COfile.write( event + "\n" )
             #print "finished Chromosome %s" % mmap[ mapIndx ][0]
             #print "Marker count: %s" % mkrCnt
             mapIndx += mkrCnt
@@ -140,7 +121,7 @@ with open(opt.flowfname) as f:
             rtype = 0
         if( status == "(PATERNAL)" ):
             rtype = 1
-        #print "%s %s" % ( id, status )
+        #print "%s %s | pid=%s, mid=%s, rtype=%s" % ( id, status, pid, mid, rtype )
         # find index to inf
         for infix,val in enumerate( inf ): # index to inf
             if( (val[0]==id ) & (val[2]==status) ):
@@ -157,8 +138,6 @@ with open(opt.flowfname) as f:
                 # fill in previous entry's inf marker count:
                 if( len(indivEvents) > 0 ):
                     indivEvents[-1].append( infMcnt )
-                    event = "\t".join( map(str,indivEvents[-1]) )
-                    COfile.write( event + "\n" )
                 ### new event:
                 chrom = mmap[ mapIndx + i ][0]
                 if( chrom != mapChrom ):
@@ -167,6 +146,13 @@ with open(opt.flowfname) as f:
                 posLower = mmap[ mapIndx + i - 1 ][2]
                 indivEvents.append( [ ped[0][0], id, pid, mid, rtype, chrom, posLower, pos, infMcnt ] )
                 infMcnt = 0 # reset
+        # fill in last entry's inf marker count (if any)
+        if( len(indivEvents) > 0 ):
+            indivEvents[-1].append( infMcnt )
+        # write events from this meiosis:
+        for i,val in enumerate( indivEvents ):
+            event = "\t".join( map(str,val) )
+            COfile.write( event + "\n" )
 
 COfile.close()
 print "Done."
