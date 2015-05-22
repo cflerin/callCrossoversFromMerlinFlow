@@ -29,14 +29,15 @@ with open(opt.mapfname) as f:
 print "Read MERLIN map file with %s lines" % len(mmap)
 
 ### read in MERLIN ped file:
-ped = []
-geno = []
+ped, geno = [], []
 with open(opt.pedfname) as f:
     for line in f:
+        if( line.startswith("end") ):
+            break
         tmp = line.rstrip().split()
         ped.append( tmp[:5] )
         geno.append( tmp[5:] )
-print "Read MERLIN ped file with %s individuals" % len(ped)
+print "Read MERLIN ped file with %s individuals and %s genotypes" % ( len(ped), len(geno[0]) )
 
 ### identify heterozygous markers:
 print "Identifying informative markers..."
@@ -54,37 +55,39 @@ for j,gval in enumerate( geno ):
     het.append( tmp )
 
 ### call informative markers in each parent-child trio:
-inf = []
+inf, infann = [], []
 for i,pval in enumerate( ped ):
     # is child:
-    if( ( pval[2]!="0" ) & ( pval[3]!="0" ) ):
-        pid = pval[2]
-        mid = pval[3]
-        cid = pval[1]
-        inf.append( [ cid, mid, '(MATERNAL)' ] )
-        inf.append( [ cid, pid, '(PATERNAL)' ] )
-        cpix = len( inf ) - 1
-        cmix = len( inf ) - 2
-        for j,val in enumerate( ped ):
-            if( val[1] == pid ):
-                pix = j
-            if( val[1] == mid ):
-                mix = j
-            if( val[1] == cid ):
-                cix = j
-        for j,val in enumerate( het[0] ):
-            phet = ( het[pix][j]==1 ) # het in father
-            mhet = ( het[mix][j]==1 ) # het in mother
-            chet = ( het[cix][j]==1 ) # het in child
-            if( ( het[pix][j]==-1 ) | ( het[mix][j]==-1 ) | ( het[cix][j]==-1 ) ): # skip if any missing
-                infp = infm = False
-            else:
-                ### informative in father:
-                infp = ( phet ) & ( ((mhet) & (not chet)) | ((not mhet) & chet) )
-                ### informative in mother:
-                infm = ( mhet ) & ( ((phet) & (not chet)) | ((not phet) & chet) )
-            inf[cmix].append( infm )
-            inf[cpix].append( infp )
+    if( ( pval[2]=="0" ) & ( pval[3]=="0" ) ):
+        continue
+    pid = pval[2]
+    mid = pval[3]
+    cid = pval[1]
+    infann.append( [ cid, mid, '(MATERNAL)' ] )
+    infann.append( [ cid, pid, '(PATERNAL)' ] )
+    for j,val in enumerate( ped ):
+        if( val[1] == pid ):
+            pix = j
+        if( val[1] == mid ):
+            mix = j
+        if( val[1] == cid ):
+            cix = j
+    infP, infM = [], []
+    for j in range( len(geno[0]) ):
+        phet = ( het[pix][j]==1 ) # het in father
+        mhet = ( het[mix][j]==1 ) # het in mother
+        chet = ( het[cix][j]==1 ) # het in child
+        if( ( het[pix][j]==-1 ) | ( het[mix][j]==-1 ) | ( het[cix][j]==-1 ) ): # skip if any missing
+            infp, infm = -1, -1 # False
+        else:
+            ### informative in father:
+            infp = ( phet ) and ( ((mhet) and (not chet)) or ((not mhet) & chet) )
+            ### informative in mother:
+            infm = ( mhet ) and ( ((phet) and (not chet)) or ((not phet) & chet) )
+        infM.append( int(infm) )
+        infP.append( int(infp) )
+    inf.append( infM ) # append maternal
+    inf.append( infP ) # append paternal
 
 ### read flow file (transposed format (--horzontal)):
 print "Reading flow file..."
@@ -96,15 +99,10 @@ mkrCnt = 0
 with open(opt.flowfname) as f:
     for line in f:
         if line in ['\n', '\r\n']: # end of chromosome
-            #print "finished Chromosome %s" % mmap[ mapIndx ][0]
-            #print "Marker count: %s" % mkrCnt
             mapIndx += mkrCnt
-            #print "Map index is now: %s" % mapIndx
             continue
         if( line.startswith( "FAMILY" ) ): # starting a new chromosome
-            infMcnt = 0 # reset informative marker count
             mapChrom = mmap[ mapIndx ][0] 
-            #print "New chrom is %s" % mapChrom
             continue
         tmp = line.rstrip().split()
         if( tmp[1] == "(FOUNDER)" ):
@@ -123,35 +121,51 @@ with open(opt.flowfname) as f:
             rtype = 1
         #print "%s %s | pid=%s, mid=%s, rtype=%s" % ( id, status, pid, mid, rtype )
         # find index to inf
-        for infix,val in enumerate( inf ): # index to inf
+        for infix,val in enumerate( infann ): # index to inf
             if( (val[0]==id ) & (val[2]==status) ):
                 break
         mkrCnt = len( tmp ) 
         indivEvents = []
+        infIx = []
         for i in range( len(tmp) ):
-            # increment informative marker counter:
-            if( inf[infix][ mapIndx + i + 3 ] ):
-                infMcnt += 1
             if( i==0 ):
+                if( inf[infix][ mapIndx + i] == 1 ):
+                    infIx.append( "inf" )
+                prevInfLoc = mmap[ mapIndx ][2]
                 continue
             if( tmp[i] != tmp[i-1] ): # breakpoint
-                # fill in previous entry's inf marker count:
-                if( len(indivEvents) > 0 ):
-                    indivEvents[-1].append( infMcnt )
+                infIx.append( "co" )
                 ### new event:
                 chrom = mmap[ mapIndx + i ][0]
                 if( chrom != mapChrom ):
                     print "ERROR chrom (%s) does not match mapChrom (%s)" % (chrom, mapChrom )
                 pos = mmap[ mapIndx + i ][2]
-                posLower = mmap[ mapIndx + i - 1 ][2]
-                indivEvents.append( [ ped[0][0], id, pid, mid, rtype, chrom, posLower, pos, infMcnt ] )
-                infMcnt = 0 # reset
-        # fill in last entry's inf marker count (if any)
-        if( len(indivEvents) > 0 ):
-            indivEvents[-1].append( infMcnt )
+                posLower = prevInfLoc # mmap[ mapIndx + i - 1 ][2]
+                indivEvents.append( [ ped[0][0], id, pid, mid, rtype, chrom, posLower, pos, -1, -1 ] )
+                event = "\t".join( map(str,indivEvents[-1]) )
+            else:
+                if( inf[infix][ mapIndx + i] == 1 ):
+                    infIx.append( "inf" )
+                    prevInfLoc = mmap[ mapIndx + i ][2]
+        coIx = 0
+        infMcnt = 0
+        if( "co" in infIx ):
+            for i,val in enumerate( infIx ):
+                if( val == "co" ):
+                    if( infMcnt == 0 ): # prevent counter going below 0
+                        infMcnt += 1
+                    if( coIx > 0 ):
+                        indivEvents[ coIx - 1 ][9] = infMcnt - 1
+                    indivEvents[ coIx ][8] = infMcnt - 1
+                    coIx +=1
+                    infMcnt = 0
+                if( val == "inf" ):
+                    infMcnt += 1
+            indivEvents[ coIx - 1 ][9] = infMcnt
         # write events from this meiosis:
         for i,val in enumerate( indivEvents ):
             event = "\t".join( map(str,val) )
+            #print event
             COfile.write( event + "\n" )
 
 COfile.close()
